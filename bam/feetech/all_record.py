@@ -18,13 +18,14 @@ arg_parser.add_argument("--motor", type=str, required=True)
 arg_parser.add_argument("--port", type=str, default="/dev/ttyUSB0")
 arg_parser.add_argument("--id", type=int, required=True)
 arg_parser.add_argument("--logdir", type=str, required=True)
-arg_parser.add_argument("--vin", type=float, default=5.1)
+arg_parser.add_argument("--vin", type=float, default=7.4)
 arg_parser.add_argument("--speak", action="store_true")
 args = arg_parser.parse_args()
 
-# kps = [130, 275, 550, 1100]
+# STS3215 适用的 P 增益值（0-255 范围）
 kps = [4, 8, 16, 32]
-trajectories = ["brutal", "sin_sin", "lift_and_drop", "up_and_down", "sin_time_square"]
+# 激励轨迹（覆盖不同摩擦工况）
+trajectories = ["sin_sin", "lift_and_drop", "up_and_down", "sin_time_square"]
 
 command_base = (
     f"python3 -m bam.feetech.record --mass {args.mass} --length {args.length}"
@@ -47,5 +48,6 @@ for kp in kps:
         command = f"{command_base} --kp {kp} --trajectory {trajectory}"
         os.system(command)
 
+        # sin_time_square 后等待系统稳定
         if trajectory == "sin_time_square":
             time.sleep(3)

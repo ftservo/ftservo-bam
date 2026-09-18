@@ -14,7 +14,7 @@ from .dynamixel.actuator import (
     XL330Actuator,
     XL330CurrentActuator,
 )
-from .feetech.actuator import STS3215Actuator
+from .feetech.actuator import STS3215Actuator, HD1910Actuator
 from .unitree.actuator import UnitreeGo1Actuator
 from .waveshare.actuator import ST3025Actuator
 
@@ -31,6 +31,8 @@ actuators = {
     "erob80_50": lambda: ErobActuator(Pendulum, damping=1.0),
     # Feetech STS3215
     "sts3215": lambda: STS3215Actuator(Pendulum),
+    # Feetech HD1910
+    "hd1910": lambda: HD1910Actuator(Pendulum),
     # Waveshare ST3025
     "waveshare_st3025": lambda: ST3025Actuator(Pendulum),
     # Unitree Go1

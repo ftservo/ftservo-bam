@@ -50,7 +50,8 @@ identification = [
     "cmaes",
     "wandb",
     "matplotlib",
-    "PyQt5"
+    "PyQt5",
+    "ftservo-python-sdk"
 ]
 # Everything at once.
 all = [
