@@ -139,26 +139,39 @@ data = {
 
 
 def read_data():
-    # 使用 SDK 自带的 ReadPos，自动处理符号转换
-    pos_raw, _, _ = packetHandler.ReadPos(motor_id)
-    # 12 位有效精度：4096 计数 = 2π（一圈）
+    # 终极优化：一条读指令，一次性读出所有需要的数据
+    # 寄存器地址从 56 到 63，连续 8 字节：
+    #   56-57: Present Position (2字节)
+    #   58-59: Present Speed (2字节)
+    #   60-61: Present Load / PWM Duty (2字节)
+    #   62:    Present Voltage (1字节)
+    #   63:    Present Temperature (1字节)
+    all_data, result, error = packetHandler.readTxRx(
+        motor_id, SMS_STS_PRESENT_POSITION_L, 8
+    )
+    check_result(result, error, "批量读取位置/速度/负载/电压/温度")
+
+    # 位置：低字节在前
+    pos_raw = all_data[0] | (all_data[1] << 8)
+    pos_raw = packetHandler.scs_tohost(pos_raw, 15)  # 16位有符号转换
     position = pos_raw / POS_SCALE  # 原始值 → 弧度
 
-    # 使用 SDK 自带的 ReadSpeed
-    speed_raw, _, _ = packetHandler.ReadSpeed(motor_id)
-    # 速度单位：原始值 × 0.732 RPM → rad/s
-    speed = speed_raw * SPEED_SCALE
+    # 速度：低字节在前
+    speed_raw = all_data[2] | (all_data[3] << 8)
+    speed_raw = packetHandler.scs_tohost(speed_raw, 15)  # 16位有符号转换
+    speed = speed_raw * SPEED_SCALE  # 原始值 → rad/s
 
-    # 负载：STS3215 有负载寄存器，但这里简化处理
-    load = 0.0
+    # 负载/PWM占空比：低字节在前，有符号
+    # 单位：原始值 / 1000 = 占空比 [-1, 1]（负号表示反向）
+    load_raw = all_data[4] | (all_data[5] << 8)
+    load_raw = packetHandler.scs_tohost(load_raw, 15)  # 16位有符号转换
+    load = load_raw / 1000.0  # 原始值 → 占空比 [-1, 1]
 
     # 电压：原始值 × 0.1 = V
-    volts_raw = read1(SMS_STS_PRESENT_VOLTAGE)
-    volts = volts_raw * 0.1
+    volts = all_data[6] * 0.1
 
     # 温度
-    temp_raw = read1(SMS_STS_PRESENT_TEMPERATURE)
-    temp = float(temp_raw)
+    temp = float(all_data[7])
 
     return {
         "position": float(position),
