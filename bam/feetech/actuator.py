@@ -1,4 +1,4 @@
-# Copyright 2025 Marc Duclusaud & Grégoire Passault
+# Copyright 2026 ftservo
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
