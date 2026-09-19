@@ -50,7 +50,6 @@ identification = [
     "cmaes",
     "wandb",
     "matplotlib",
-    "PyQt5",
     "ftservo-python-sdk"
 ]
 # Everything at once.
@@ -76,3 +75,5 @@ extend-exclude = ["docs/_build"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+
