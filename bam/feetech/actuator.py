@@ -50,7 +50,7 @@ class STS3215Actuator(FeetechBaseActuator):
     """
     Feetech STS3215 7.4v
 
-    无内部速率限制（直接跟踪目标位置），使用 ftservo-python-sdk 官方驱动。
+    固件内部有速率限制（先平滑目标位置，再 P 控制），使用 ftservo-python-sdk 官方驱动。
     """
 
     def __init__(self, testbench_class: Testbench):
@@ -64,6 +64,42 @@ class STS3215Actuator(FeetechBaseActuator):
             error_gain=0.163,
             max_pwm=0.97,
         )
+        self.q_target_smooth = None  # 内部平滑目标位置（有状态）
+
+    def compute_control(
+        self, q_target: ArrayLike, q: ArrayLike, dq: ArrayLike, dt: float
+    ) -> ArrayLike | None:
+        """带内部速率限制的 P 控制（模拟 STS3215 固件行为）。
+
+        :param q_target: 目标关节角 [rad]
+        :param q: 当前关节角 [rad]
+        :param dq: 当前关节速度 [rad/s]（未使用）
+        :param dt: 时间步 [s]，用于内部目标速率限制
+        :returns: 输出到电机的电压 [V]
+        """
+        # 第一次调用，或者 reset 后：内部目标 = 当前位置
+        if self.q_target_smooth is None:
+            self.q_target_smooth = q
+
+        # 速率限制：内部目标最多以 max_velocity 的速度靠近目标
+        max_step = self.model.max_velocity.value * dt
+        self.q_target_smooth = self.backend.clamp(
+            q_target,
+            self.q_target_smooth - max_step,
+            self.q_target_smooth + max_step,
+        )
+
+        # P 控制器：误差 = 平滑后的内部目标 - 当前位置
+        duty_cycle = (
+            (self.q_target_smooth - q)
+            * self.kp
+            * self.error_gain
+            * self.model.error_gain_ratio.value
+        )
+        duty_cycle = self.backend.clamp(duty_cycle, -self.max_pwm, self.max_pwm)
+        self.duty_cycle = duty_cycle
+
+        return self.vin * duty_cycle
 
     def get_extra_inertia(self) -> float:
         return self.model.armature.value
@@ -77,8 +113,13 @@ class STS3215Actuator(FeetechBaseActuator):
         # 电机电阻 [Ohm]
         self.model.R = Parameter(2.0, 0.1, 10.0)
 
-        # 电机转子 / 等效惯量 [kg·m²]
-        self.model.armature = Parameter(0.0001, 0.00001, 0.04)
+        # 等效转动惯量 [kg·m²]（含电机转子 + 减速箱 + 连杆负载）
+        # 实测拟合值约 0.024，初始值调整到更接近实际值
+        self.model.armature = Parameter(0.024, 0.001, 0.08)
+
+        # 固件内部最大速率限制 [rad/s]
+        # 估算：空载转速 67 RPM ≈ 7 rad/s
+        self.model.max_velocity = Parameter(7.0, 1.0, 15.0)
 
         self.model.q_offset = Parameter(0, -0.2, 0.2)
 
