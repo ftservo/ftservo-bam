@@ -13,10 +13,18 @@ from scservo_sdk.sms_sts import SMS_STS_PRESENT_VOLTAGE, SMS_STS_PRESENT_TEMPERA
 import json
 import datetime
 import os
+import sys
 import numpy as np
 import argparse
 import time
 from bam.trajectory import *
+
+# Windows 系统提高定时器精度到 1ms
+# 否则 time.sleep(0.001) 实际会等 15.6ms
+if sys.platform == "win32":
+    import ctypes
+    winmm = ctypes.windll.winmm
+    winmm.timeBeginPeriod(1)
 
 # P 增益寄存器地址（不同舵机型号地址不同）
 # STS3215: 地址 21 (0x15)
@@ -99,18 +107,22 @@ def write1(addr, value):
     result, error = packetHandler.write1ByteTxRx(motor_id, addr, value)
     check_result(result, error, f"写寄存器 addr={addr}")
 
-# 辅助：写 1 字节（只发不收，不等应答，速度快）
+# 辅助：写 1 字节（同步写，广播指令，舵机不应答，无残留）
 def write1_only(addr, value):
-    packetHandler.write1ByteTxOnly(motor_id, addr, value)
+    # 同步写：[ID, 数据]
+    param = [motor_id, value & 0xFF]
+    packetHandler.syncWriteTxOnly(addr, 1, param, 2)
 
 # 辅助：写 2 字节（带应答）
 def write2(addr, value):
     result, error = packetHandler.write2ByteTxRx(motor_id, addr, value)
     check_result(result, error, f"写寄存器 addr={addr}")
 
-# 辅助：写 2 字节（只发不收，不等应答，速度快）
+# 辅助：写 2 字节（同步写，广播指令，舵机不应答，无残留）
 def write2_only(addr, value):
-    packetHandler.write2ByteTxOnly(motor_id, addr, value)
+    # 同步写：[ID, 数据低字节, 数据高字节]
+    param = [motor_id, value & 0xFF, (value >> 8) & 0xFF]
+    packetHandler.syncWriteTxOnly(addr, 2, param, 3)
 
 # 辅助：读 1 字节
 def read1(addr):
@@ -207,21 +219,19 @@ try:
 
     torque_enable = True
     while time.time() - start < trajectory.duration:
-        t = time.time() - start
+        loop_start = time.time() - start
+        t = loop_start
         goal_position, new_torque_enable = trajectory(t)
 
-        # 扭矩使能切换（只发不收）
+        # 扭矩使能切换（同步写，不应答）
         if new_torque_enable != torque_enable:
             write1_only(SMS_STS_TORQUE_ENABLE, 1 if new_torque_enable else 0)
             torque_enable = new_torque_enable
 
-        # 发送目标位置（只发不收，不等应答）
+        # 发送目标位置（同步写，不应答）
         if torque_enable:
             pos_value = pos_rad_to_raw(goal_position)
             write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-
-        # 固定延时 1ms
-        time.sleep(0.001)
 
         # 读取数据
         t0 = time.time() - start
@@ -233,10 +243,19 @@ try:
         entry["torque_enable"] = torque_enable
         data["entries"].append(entry)
 
-    # ==================== 录制结束，缓慢回零 ====================
-    goal_position = data["entries"][-1]["position"]
+        # 动态延时：保证每帧至少 1ms 周期
+        loop_duration = time.time() - start - loop_start
+        if loop_duration < 0.001:
+            time.sleep(0.001 - loop_duration)
+
+    # ==================== 录制结束，先延时再回零 ====================
+    time.sleep(0.5)  # 等 0.5 秒，让舵机稳定
+
+    # 读当前实际位置作为回零起点
+    current = read_data()
+    goal_position = current["position"]
     return_dt = 0.01
-    max_variation = return_dt * 1.0
+    max_variation = return_dt * 1.0  # 1 rad/s
 
     while abs(goal_position) > 0:
         if goal_position > 0:
