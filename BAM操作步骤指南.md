@@ -289,13 +289,13 @@ P 增益值：`[4, 8, 16, 32, 64]`（HD1910 默认范围）
 | `trajectory` | string | 轨迹名称 |
 | `position` | rad | 实际位置 |
 | `speed` | rad/s | 实际速度 |
-| `load` | [-1, 1] | **PWM 占空比反馈**（1.0 = 100% PWM） |
+| `load` | [-1, 1] | **PWM 占空比反馈**（1.0 = 100% PWM，11位寄存器：bit0-9数值，bit10方向位） |
 | `input_volts` | V | 供电电压 |
 | `temp` | °C | 舵机温度 |
 | `goal_position` | rad | 目标位置 |
 | `torque_enable` | bool | 扭矩是否开启 |
 
-> **采样率：** ~600-1000 Hz（批量读取 + 同步写广播优化后），每轮循环读 8 字节一次拿全部数据。
+> **采样率：** ~500 Hz（批量读取 + 同步写广播优化后），每轮循环读 8 字节一次拿全部数据。
 
 ### 3.4 数据预处理（Feetech HD1910）
 
@@ -623,6 +623,7 @@ A: 辨识完成后，将参数 JSON 和原始数据提交到 BAM 仓库的 `bam/
 - **论文原文：** https://arxiv.org/abs/2410.08650
 - **原始数据：** HuggingFace - buckots/Gregwar/bam_data
 - **示例项目：** Open Duck Mini（使用 BAM 标定舵机的开源人形机器人）
+
 
 
 
