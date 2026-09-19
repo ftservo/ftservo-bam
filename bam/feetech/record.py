@@ -196,8 +196,8 @@ try:
     for i in range(max_retry):
         try:
             write1(ADDR_P_GAIN, args.kp)
-            write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-            write2(SMS_STS_GOAL_SPEED_L, 0)  # 速度设为0，位置模式
+            write2(SMS_STS_GOAL_SPEED_L, 0)  # 先写速度=0，位置模式（不限制速度）
+            write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)  # 再写目标位置
             break  # 都成功了就跳出
         except RuntimeError as e:
             if i == max_retry - 1:
