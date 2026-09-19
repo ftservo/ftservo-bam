@@ -243,17 +243,31 @@ uv run python -m bam.feetech.all_record `
   "trajectory": "sin_time_square",
   "entries": [
     {
-      "timestamp": 0.0077,
+      "timestamp": 0.004,
       "position": 0.0015,
       "speed": 0.024,
-      "load": 0.0,
+      "load": 0.05,
       "input_volts": 7.4,
+      "temp": 35.0,
       "goal_position": 0.0,
       "torque_enable": true
     }
   ]
 }
 ```
+
+**字段说明：**
+| 字段 | 单位 | 说明 |
+|------|------|------|
+| `position` | rad | 实际位置 |
+| `speed` | rad/s | 实际速度 |
+| `load` | [-1, 1] | **PWM 占空比反馈**（1.0 = 100% PWM） |
+| `input_volts` | V | 供电电压 |
+| `temp` | °C | 舵机温度 |
+| `goal_position` | rad | 目标位置 |
+| `torque_enable` | bool | 扭矩是否开启 |
+
+> **采样率：** ~250 Hz（批量读取优化后），每轮循环读 8 字节一次拿全部数据。
 
 ### 3.4 数据预处理（Feetech HD1910）
 
