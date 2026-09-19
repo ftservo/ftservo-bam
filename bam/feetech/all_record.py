@@ -14,6 +14,7 @@ import subprocess
 
 arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument("--mass", type=float, required=True)
+arg_parser.add_argument("--arm-mass", type=float, default=0.0, help="摆臂自身质量 [kg]")
 arg_parser.add_argument("--length", type=float, required=True)
 arg_parser.add_argument("--motor", type=str, required=True)
 arg_parser.add_argument("--port", type=str, default="/dev/ttyUSB0")
@@ -43,6 +44,7 @@ command_base = [
     sys.executable,
     "-m", "bam.feetech.record",
     "--mass", str(args.mass),
+    "--arm-mass", str(args.arm_mass),
     "--length", str(args.length),
     "--port", args.port,
     "--logdir", args.logdir,

@@ -49,6 +49,7 @@ SPEED_SCALE = 0.732 * RPM_TO_RAD_S  # 原始值 → rad/s
 
 arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument("--mass", type=float, required=True)
+arg_parser.add_argument("--arm-mass", type=float, default=0.0, help="摆臂自身质量 [kg]")
 arg_parser.add_argument("--length", type=float, required=True)
 arg_parser.add_argument("--port", type=str, default="/dev/ttyUSB0")
 arg_parser.add_argument("--logdir", type=str, required=True)
@@ -170,64 +171,31 @@ def read_data():
 try:
     trajectory = trajectories[args.trajectory]
 
-    # 预热：写 P 增益、扭矩使能、目标位置
-    # 写成功后不再写，最多试 10 次，全失败就报错退出
-    p_gain_ok = False
-    torque_ok = False
-    pos_ok = False
+    # 预热：写 P 增益和目标位置，最多重试 10 次，失败就报错退出
+    # 写成功后等 1 秒稳定
+    goal_position, torque_enable = trajectory(0)
+    pos_value = pos_rad_to_raw(goal_position)
+
     max_retry = 10
-    retry_count = 0
+    for i in range(max_retry):
+        try:
+            write1(ADDR_P_GAIN, args.kp)
+            write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+            break  # 都成功了就跳出
+        except RuntimeError as e:
+            if i == max_retry - 1:
+                raise RuntimeError(f"预热失败，共尝试 {max_retry} 次：{e}") from e
+            print(f"预热第 {i+1} 次失败：{e}，10ms 后重试...")
+            time.sleep(0.01)
 
-    while retry_count < max_retry:
-        retry_count += 1
-        goal_position, torque_enable = trajectory(0)
-        pos_value = pos_rad_to_raw(goal_position)
-
-        # 目标位置：没成功就写，成功了就停（带应答）
-        if not pos_ok:
-            try:
-                write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-                pos_ok = True
-            except RuntimeError:
-                pos_ok = False
-
-        # P 增益：没成功就再试（带应答，确认写入成功）
-        if not p_gain_ok:
-            try:
-                write1(ADDR_P_GAIN, args.kp)
-                p_gain_ok = True
-            except RuntimeError:
-                pass
-
-        # 扭矩使能：没成功就再试（带应答，确认写入成功）
-        if not torque_ok:
-            try:
-                write1(SMS_STS_TORQUE_ENABLE, 1)
-                torque_ok = True
-            except RuntimeError:
-                pass
-
-        # 都成功了就提前退出，不用试满 10 次
-        if pos_ok and p_gain_ok and torque_ok:
-            break
-
-        time.sleep(0.01)
-
-    # 检查是否都成功了
-    if not pos_ok or not p_gain_ok or not torque_ok:
-        raise RuntimeError(
-            f"预热失败：位置={'成功' if pos_ok else '失败'}, "
-            f"P 增益={'成功' if p_gain_ok else '失败'}, "
-            f"扭矩使能={'成功' if torque_ok else '失败'}, "
-            f"共尝试 {retry_count} 次，请检查接线和舵机 ID"
-        )
-
-    print(f"预热完成：位置、P 增益和扭矩使能已确认（第 {retry_count} 次成功）")
+    print(f"预热完成：P 增益和目标位置已写入（第 {i+1} 次成功），等待 1 秒稳定")
+    time.sleep(1)
 
     # ==================== 开始录制 ====================
     start = time.time()
     data = {
         "mass": args.mass,
+        "arm-mass": args.arm_mass,
         "length": args.length,
         "kp": args.kp,
         "vin": args.vin,
@@ -301,4 +269,5 @@ finally:
 # ==================== 保存数据 ====================
 date = datetime.datetime.now().strftime("%Y-%m-%d_%Hh%Mm%S")
 filename = f"{args.logdir}/{date}.json"
-json.dump(data, open(filename, "w"))
+with open(filename, "w") as f:
+    json.dump(data, f)
