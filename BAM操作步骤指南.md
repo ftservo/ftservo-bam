@@ -279,7 +279,7 @@ uv run python -m bam.feetech.all_record `
 | `goal_position` | rad | 目标位置 |
 | `torque_enable` | bool | 扭矩是否开启 |
 
-> **采样率：** ~250 Hz（批量读取优化后），每轮循环读 8 字节一次拿全部数据。
+> **采样率：** ~600-1000 Hz（批量读取 + 同步写广播优化后），每轮循环读 8 字节一次拿全部数据。
 
 ### 3.4 数据预处理（Feetech HD1910）
 
