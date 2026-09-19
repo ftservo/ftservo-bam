@@ -17,7 +17,36 @@ if TYPE_CHECKING:
     from bam.actuator import ArrayLike
 
 
-class STS3215Actuator(VoltageControlledActuator):
+class FeetechBaseActuator(VoltageControlledActuator):
+    """Feetech 舵机公共基类：无内部速率限制，直接由位置误差计算 PWM。
+
+    STS3215 和 HD1910 同协议，控制算法完全一样，只有参数不同。
+    """
+
+    def compute_control(
+        self, q_target: ArrayLike, q: ArrayLike, dq: ArrayLike, dt: float
+    ) -> ArrayLike | None:
+        """直接由位置误差计算电压指令（无内部速率限制）。
+
+        :param q_target: 目标关节角 [rad]
+        :param q: 当前关节角 [rad]
+        :param dq: 当前关节速度 [rad/s]（未使用）
+        :param dt: 时间步 [s]（未使用）
+        :returns: 输出到电机的电压 [V]
+        """
+        duty_cycle = (
+            (q_target - q)
+            * self.kp
+            * self.error_gain
+            * self.model.error_gain_ratio.value
+        )
+        duty_cycle = self.backend.clamp(duty_cycle, -self.max_pwm, self.max_pwm)
+        self.duty_cycle = duty_cycle  # 供日志记录（及电池压降模型）
+
+        return self.vin * duty_cycle
+
+
+class STS3215Actuator(FeetechBaseActuator):
     """
     Feetech STS3215 7.4v
 
@@ -53,38 +82,16 @@ class STS3215Actuator(VoltageControlledActuator):
 
         self.model.q_offset = Parameter(0, -0.2, 0.2)
 
-    def compute_control(
-        self, q_target: ArrayLike, q: ArrayLike, dq: ArrayLike, dt: float
-    ) -> ArrayLike | None:
-        """直接由位置误差计算电压指令（无内部速率限制）。
 
-        :param q_target: 目标关节角 [rad]
-        :param q: 当前关节角 [rad]
-        :param dq: 当前关节速度 [rad/s]（未使用）
-        :param dt: 时间步 [s]（未使用）
-        :returns: 输出到电机的电压 [V]
-        """
-        duty_cycle = (
-            (q_target - q)
-            * self.kp
-            * self.error_gain
-            * self.model.error_gain_ratio.value
-        )
-        duty_cycle = self.backend.clamp(duty_cycle, -self.max_pwm, self.max_pwm)
-        self.duty_cycle = duty_cycle  # 供日志记录（及电池压降模型）
-
-        return self.vin * duty_cycle
-
-
-class HD1910Actuator(VoltageControlledActuator):
+class HD1910Actuator(FeetechBaseActuator):
     """
     Feetech HD1910 7.4v 金属齿轮数字舵机
 
-    与 STS3215 同协议，寄存器地址一致：
+    与 STS3215 同协议，寄存器地址大部分一致：
     - 位置精度：12 位（4096 计数/圈，0.088°/步）
     - 速度单位：0.732 RPM/单位
     - 电压单位：0.1 V/单位
-    - P 增益地址：21
+    - **P 增益地址：50 (0x32)**（注意：STS3215 是 21，不一样！）
     - 中位位置：2048
     - 死区宽度：≤0.088°
 
@@ -122,25 +129,3 @@ class HD1910Actuator(VoltageControlledActuator):
         self.model.armature = Parameter(0.00005, 0.000005, 0.02)
 
         self.model.q_offset = Parameter(0, -0.2, 0.2)
-
-    def compute_control(
-        self, q_target: ArrayLike, q: ArrayLike, dq: ArrayLike, dt: float
-    ) -> ArrayLike | None:
-        """直接由位置误差计算电压指令（无内部速率限制）。
-
-        :param q_target: 目标关节角 [rad]
-        :param q: 当前关节角 [rad]
-        :param dq: 当前关节速度 [rad/s]（未使用）
-        :param dt: 时间步 [s]（未使用）
-        :returns: 输出到电机的电压 [V]
-        """
-        duty_cycle = (
-            (q_target - q)
-            * self.kp
-            * self.error_gain
-            * self.model.error_gain_ratio.value
-        )
-        duty_cycle = self.backend.clamp(duty_cycle, -self.max_pwm, self.max_pwm)
-        self.duty_cycle = duty_cycle
-
-        return self.vin * duty_cycle

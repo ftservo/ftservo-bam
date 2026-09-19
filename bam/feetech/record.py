@@ -82,15 +82,23 @@ def check_result(result, error, msg=""):
         raise RuntimeError(f"{msg} 舵机错误: {packetHandler.getRxPacketError(error)}")
 
 
-# 辅助：写 1 字节
+# 辅助：写 1 字节（带应答）
 def write1(addr, value):
     result, error = packetHandler.write1ByteTxRx(motor_id, addr, value)
     check_result(result, error, f"写寄存器 addr={addr}")
 
-# 辅助：写 2 字节
+# 辅助：写 1 字节（只发不收，不等应答，速度快）
+def write1_only(addr, value):
+    packetHandler.write1ByteTxOnly(motor_id, addr, value)
+
+# 辅助：写 2 字节（带应答）
 def write2(addr, value):
     result, error = packetHandler.write2ByteTxRx(motor_id, addr, value)
     check_result(result, error, f"写寄存器 addr={addr}")
+
+# 辅助：写 2 字节（只发不收，不等应答，速度快）
+def write2_only(addr, value):
+    packetHandler.write2ByteTxOnly(motor_id, addr, value)
 
 # 辅助：读 1 字节
 def read1(addr):
@@ -105,41 +113,8 @@ def read2(addr):
     return value
 
 
-# 设置 P 增益
-write1(ADDR_P_GAIN, args.kp)
-
-# 使能扭矩
-write1(SMS_STS_TORQUE_ENABLE, 1)
-
-trajectory = trajectories[args.trajectory]
-
-# 预热 1 秒
-start = time.time()
-while time.time() - start < 1.0:
-    goal_position, torque_enable = trajectory(0)
-    # 使用 SDK 自带的 ReadPos 做符号转换的逆运算来写位置
-    # goal_position 是弧度，转成原始有符号值
-    pos_value = int(goal_position * POS_SCALE)
-    write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-    # 每帧更新 P 增益
-    write1(ADDR_P_GAIN, args.kp)
-    time.sleep(0.01)
-
-# ==================== 开始录制 ====================
-start = time.time()
-data = {
-    "mass": args.mass,
-    "length": args.length,
-    "kp": args.kp,
-    "vin": args.vin,
-    "motor": args.motor,
-    "trajectory": args.trajectory,
-    "entries": [],
-}
-
-
 def read_data():
-    # 终极优化：一条读指令，一次性读出所有需要的数据
+    # 一条读指令，一次性读出所有需要的数据
     # 寄存器地址从 56 到 63，连续 8 字节：
     #   56-57: Present Position (2字节)
     #   58-59: Present Speed (2字节)
@@ -153,19 +128,18 @@ def read_data():
 
     # 位置：低字节在前
     pos_raw = all_data[0] | (all_data[1] << 8)
-    pos_raw = packetHandler.scs_tohost(pos_raw, 15)  # 16位有符号转换
-    position = pos_raw / POS_SCALE  # 原始值 → 弧度
+    pos_raw = packetHandler.scs_tohost(pos_raw, 15)
+    position = pos_raw / POS_SCALE
 
     # 速度：低字节在前
     speed_raw = all_data[2] | (all_data[3] << 8)
-    speed_raw = packetHandler.scs_tohost(speed_raw, 15)  # 16位有符号转换
-    speed = speed_raw * SPEED_SCALE  # 原始值 → rad/s
+    speed_raw = packetHandler.scs_tohost(speed_raw, 15)
+    speed = speed_raw * SPEED_SCALE
 
     # 负载/PWM占空比：低字节在前，有符号
-    # 单位：原始值 / 1000 = 占空比 [-1, 1]（负号表示反向）
     load_raw = all_data[4] | (all_data[5] << 8)
-    load_raw = packetHandler.scs_tohost(load_raw, 15)  # 16位有符号转换
-    load = load_raw / 1000.0  # 原始值 → 占空比 [-1, 1]
+    load_raw = packetHandler.scs_tohost(load_raw, 15)
+    load = load_raw / 1000.0  # 1000 = 100% PWM
 
     # 电压：原始值 × 0.1 = V
     volts = all_data[6] * 0.1
@@ -182,57 +156,136 @@ def read_data():
     }
 
 
-torque_enable = True
-while time.time() - start < trajectory.duration:
-    t = time.time() - start
-    goal_position, new_torque_enable = trajectory(t)
+try:
+    trajectory = trajectories[args.trajectory]
 
-    # 扭矩使能切换
-    if new_torque_enable != torque_enable:
-        write1(SMS_STS_TORQUE_ENABLE, 1 if new_torque_enable else 0)
-        torque_enable = new_torque_enable
-        time.sleep(0.001)
+    # 预热：写 P 增益、扭矩使能、目标位置
+    # 写成功后不再写，最多试 10 次，全失败就报错退出
+    p_gain_ok = False
+    torque_ok = False
+    pos_ok = False
+    max_retry = 10
+    retry_count = 0
 
-    # 发送目标位置
-    if torque_enable:
+    while retry_count < max_retry:
+        retry_count += 1
+        goal_position, torque_enable = trajectory(0)
         pos_value = int(goal_position * POS_SCALE)
-        write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-        time.sleep(0.001)
 
-    # 读取数据
-    t0 = time.time() - start
-    entry = read_data()
-    t1 = time.time() - start
+        # 目标位置：没成功就写，成功了就停（带应答）
+        if not pos_ok:
+            try:
+                write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+                pos_ok = True
+            except RuntimeError:
+                pos_ok = False
 
-    entry["timestamp"] = (t0 + t1) / 2.0
-    entry["goal_position"] = goal_position
-    entry["torque_enable"] = torque_enable
-    data["entries"].append(entry)
+        # P 增益：没成功就再试（带应答，确认写入成功）
+        if not p_gain_ok:
+            try:
+                write1(ADDR_P_GAIN, args.kp)
+                p_gain_ok = True
+            except RuntimeError:
+                pass
 
-# ==================== 录制结束，缓慢回零 ====================
-goal_position = data["entries"][-1]["position"]
-return_dt = 0.01
-max_variation = return_dt * 1.0
+        # 扭矩使能：没成功就再试（带应答，确认写入成功）
+        if not torque_ok:
+            try:
+                write1(SMS_STS_TORQUE_ENABLE, 1)
+                torque_ok = True
+            except RuntimeError:
+                pass
 
-while abs(goal_position) > 0:
-    if goal_position > 0:
-        goal_position = max(0, goal_position - max_variation)
-    else:
-        goal_position = min(0, goal_position + max_variation)
+        # 都成功了就提前退出，不用试满 10 次
+        if pos_ok and p_gain_ok and torque_ok:
+            break
 
-    pos_value = int(goal_position * POS_SCALE)
-    write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
-    time.sleep(return_dt)
+        time.sleep(0.01)
 
-# 归位到零位
-write2(SMS_STS_GOAL_POSITION_L, 0)
-time.sleep(1)
+    # 检查是否都成功了
+    if not pos_ok or not p_gain_ok or not torque_ok:
+        raise RuntimeError(
+            f"预热失败：位置={'成功' if pos_ok else '失败'}, "
+            f"P 增益={'成功' if p_gain_ok else '失败'}, "
+            f"扭矩使能={'成功' if torque_ok else '失败'}, "
+            f"共尝试 {retry_count} 次，请检查接线和舵机 ID"
+        )
 
-# 关闭扭矩
-write1(SMS_STS_TORQUE_ENABLE, 0)
+    print(f"预热完成：位置、P 增益和扭矩使能已确认（第 {retry_count} 次成功）")
 
-# 关闭串口
-portHandler.closePort()
+    # ==================== 开始录制 ====================
+    start = time.time()
+    data = {
+        "mass": args.mass,
+        "length": args.length,
+        "kp": args.kp,
+        "vin": args.vin,
+        "motor": args.motor,
+        "trajectory": args.trajectory,
+        "entries": [],
+    }
+
+
+    torque_enable = True
+    while time.time() - start < trajectory.duration:
+        t = time.time() - start
+        goal_position, new_torque_enable = trajectory(t)
+
+        # 记录写操作开始时间
+        t_write_start = time.time()
+
+        # 扭矩使能切换（只发不收）
+        if new_torque_enable != torque_enable:
+            write1_only(SMS_STS_TORQUE_ENABLE, 1 if new_torque_enable else 0)
+            torque_enable = new_torque_enable
+
+        # 发送目标位置（只发不收，不等应答）
+        if torque_enable:
+            pos_value = int(goal_position * POS_SCALE)
+            write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+
+        # 计算写操作耗时，不足 1ms 就补延时
+        t_write_end = time.time()
+        write_duration = t_write_end - t_write_start
+        if write_duration < 0.001:
+            time.sleep(0.001 - write_duration)
+
+        # 读取数据
+        t0 = time.time() - start
+        entry = read_data()
+        t1 = time.time() - start
+
+        entry["timestamp"] = (t0 + t1) / 2.0
+        entry["goal_position"] = goal_position
+        entry["torque_enable"] = torque_enable
+        data["entries"].append(entry)
+
+    # ==================== 录制结束，缓慢回零 ====================
+    goal_position = data["entries"][-1]["position"]
+    return_dt = 0.01
+    max_variation = return_dt * 1.0
+
+    while abs(goal_position) > 0:
+        if goal_position > 0:
+            goal_position = max(0, goal_position - max_variation)
+        else:
+            goal_position = min(0, goal_position + max_variation)
+
+        pos_value = int(goal_position * POS_SCALE)
+        write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+        time.sleep(return_dt)
+
+    # 归位到零位
+    write2_only(SMS_STS_GOAL_POSITION_L, 0)
+    time.sleep(1)
+
+finally:
+    # 不管出不出错，都要关闭扭矩和串口
+    try:
+        write1_only(SMS_STS_TORQUE_ENABLE, 0)  # 关闭扭矩（只发不收）
+    except Exception:
+        pass  # 关失败也无所谓，反正串口要关了
+    portHandler.closePort()  # 关闭串口
 
 # ==================== 保存数据 ====================
 date = datetime.datetime.now().strftime("%Y-%m-%d_%Hh%Mm%S")
