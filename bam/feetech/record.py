@@ -160,10 +160,14 @@ def read_data():
     speed_raw = packetHandler.scs_tohost(speed_raw, 15)
     speed = speed_raw * SPEED_SCALE
 
-    # 负载/PWM占空比：低字节在前，有符号
+    # 负载/PWM占空比：低字节在前
+    # 11位寄存器：bit 0-9 是数值（0-1000），bit 10 是方向位（0=正，1=负）
     load_raw = all_data[4] | (all_data[5] << 8)
-    load_raw = packetHandler.scs_tohost(load_raw, 15)
-    load = load_raw / 1000.0  # 1000 = 100% PWM
+    load_value = load_raw & 0x3FF  # 取低10位数值
+    load_sign = (load_raw >> 10) & 0x1  # bit 10 是方向位
+    load = load_value / 1000.0
+    if load_sign:
+        load = -load
 
     # 电压：原始值 × 0.1 = V
     volts = all_data[6] * 0.1
@@ -285,4 +289,5 @@ date = datetime.datetime.now().strftime("%Y-%m-%d_%Hh%Mm%S")
 filename = f"{args.logdir}/{date}.json"
 with open(filename, "w") as f:
     json.dump(data, f)
+
 
