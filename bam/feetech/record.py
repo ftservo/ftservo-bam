@@ -210,9 +210,6 @@ try:
         t = time.time() - start
         goal_position, new_torque_enable = trajectory(t)
 
-        # 记录写操作开始时间
-        t_write_start = time.time()
-
         # 扭矩使能切换（只发不收）
         if new_torque_enable != torque_enable:
             write1_only(SMS_STS_TORQUE_ENABLE, 1 if new_torque_enable else 0)
@@ -223,11 +220,8 @@ try:
             pos_value = pos_rad_to_raw(goal_position)
             write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
 
-        # 计算写操作耗时，不足 1ms 就补延时
-        t_write_end = time.time()
-        write_duration = t_write_end - t_write_start
-        if write_duration < 0.001:
-            time.sleep(0.001 - write_duration)
+        # 固定延时 1ms
+        time.sleep(0.001)
 
         # 读取数据
         t0 = time.time() - start
