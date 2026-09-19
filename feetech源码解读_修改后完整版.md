@@ -359,6 +359,8 @@ python -m bam.feetech.record `
 
 **主循环：**
 ```python
+read_fail_count = 0
+MAX_READ_FAIL = 10
 while time.time() - start < trajectory.duration:
     loop_start = time.time() - start
     goal_position, new_torque_enable = trajectory(t)  # 生成轨迹点
@@ -373,15 +375,25 @@ while time.time() - start < trajectory.duration:
         pos_value = pos_rad_to_raw(goal_position)
         write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
     
-    # 读取数据
-    entry = read_data()
-    data["entries"].append(entry)
+    # 读取数据（带容错）
+    try:
+        entry = read_data()
+        data["entries"].append(entry)
+    except RuntimeError as e:
+        read_fail_count += 1
+        if read_fail_count >= MAX_READ_FAIL:
+            raise RuntimeError(f"连续读取失败 {MAX_READ_FAIL} 次，退出") from e
     
     # 动态延时：保证每帧至少 1ms 周期
     loop_duration = time.time() - start - loop_start
     if loop_duration < 0.001:
         time.sleep(0.001 - loop_duration)
 ```
+
+**读取失败容错逻辑：**
+- 失败 <10 次：打印失败次数，**不记录这条数据，继续录制**
+- 失败 ≥10 次：报错退出
+- 每段轨迹独立计数，新的一段重新从 0 开始
 
 **为什么用同步写（而不是普通 TxOnly）：**
 - 普通 TxOnly 写指令后，舵机仍然会返回应答包
