@@ -261,8 +261,11 @@ SPEED_SCALE = 0.732 * RPM_TO_RAD_S  # ≈ 0.0767 rad/s 每单位
 | 目标位置（低字节） | 42 | 42 | `SMS_STS_GOAL_POSITION_L` | RW |
 | 当前位置（低字节） | 56 | 56 | `SMS_STS_PRESENT_POSITION_L` | R |
 | 当前速度（低字节） | 58 | 58 | `SMS_STS_PRESENT_SPEED_L` | R |
+| **当前负载/PWM占空比** | **60** | **60** | —（批量读取解析） | R |
 | 当前电压 | 62 | 62 | `SMS_STS_PRESENT_VOLTAGE` | R |
 | 当前温度 | 63 | 63 | `SMS_STS_PRESENT_TEMPERATURE` | R |
+
+> 注：地址 56~63 连续 8 字节，可一次批量读取，见 2.6 节。
 
 ---
 
@@ -323,57 +326,112 @@ python -m bam.feetech.record \
 ### 2.5 录制主流程
 
 ```
-初始化 → 预热 1 秒 → 轨迹播放录制 → 缓慢回零 → 关闭串口 → 保存 JSON
+初始化 → 预热（写成功就停，最多试10次）→ 轨迹播放录制 → 缓慢回零 → 关闭扭矩+串口 → 保存 JSON
 ```
+
+**预热阶段：**
+- 写 P 增益、扭矩使能、目标位置
+- 每个写操作：没成功就再试，成功了就停
+- 最多试 10 次，全失败就报错退出
+- 报错信息会指明哪个写失败了
 
 **主循环：**
 ```python
 while time.time() - start < trajectory.duration:
-    goal_position, torque_enable = trajectory(t)  # 生成轨迹点
+    goal_position, new_torque_enable = trajectory(t)  # 生成轨迹点
     
-    # 扭矩使能切换
-    if torque_enable 变化:
-        write1(SMS_STS_TORQUE_ENABLE, 1/0)
+    # 记录写操作开始时间
+    t_write_start = time.time()
     
-    # 发送目标位置（弧度 → 原始计数）
+    # 扭矩使能切换（只发不收，不等应答）
+    if new_torque_enable != torque_enable:
+        write1_only(SMS_STS_TORQUE_ENABLE, 1 if new_torque_enable else 0)
+        torque_enable = new_torque_enable
+    
+    # 发送目标位置（只发不收，不等应答）
     if torque_enable:
         pos_value = int(goal_position * POS_SCALE)
-        write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+        write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+    
+    # 动态延时：写操作不足1ms就补，超过1ms就不补
+    t_write_end = time.time()
+    write_duration = t_write_end - t_write_start
+    if write_duration < 0.001:
+        time.sleep(0.001 - write_duration)
     
     # 读取传感器数据
     entry = read_data()
     data["entries"].append(entry)
 ```
 
+**写入方式对比：**
+| 阶段 | 写入方式 | 说明 |
+|------|---------|------|
+| 预热阶段 | 带应答（write1/write2） | 确认写入成功 |
+| 录制主循环 | **只发不收（write1_only/write2_only）** | 追求速度，提升采样率 |
+| 回零阶段 | **只发不收（write2_only）** | 不需要确认 |
+| 关闭扭矩 | **只发不收（write1_only）** | 反正要关串口了 |
+
 ---
 
-### 2.6 数据读取（`read_data()`）
+### 2.6 数据读取（`read_data()`）— 批量读取优化
+
+**优化说明：** 一次读 8 字节，同时拿到所有数据，采样率从 ~100 Hz 提升到 ~250 Hz。
 
 ```python
 def read_data():
-    # 位置：SDK ReadPos 自动处理符号 → 除以 POS_SCALE 转弧度
-    pos_raw, _, _ = packetHandler.ReadPos(motor_id)
+    # 一次读 8 字节，连续地址 56~63
+    all_data, result, error = packetHandler.readTxRx(
+        motor_id, SMS_STS_PRESENT_POSITION_L, 8
+    )
+
+    # 位置：低字节在前 → 有符号转换 → 转弧度
+    pos_raw = all_data[0] | (all_data[1] << 8)
+    pos_raw = packetHandler.scs_tohost(pos_raw, 15)
     position = pos_raw / POS_SCALE
 
-    # 速度：SDK ReadSpeed → 乘以 SPEED_SCALE 转 rad/s
-    speed_raw, _, _ = packetHandler.ReadSpeed(motor_id)
+    # 速度：低字节在前 → 有符号转换 → 转 rad/s
+    speed_raw = all_data[2] | (all_data[3] << 8)
+    speed_raw = packetHandler.scs_tohost(speed_raw, 15)
     speed = speed_raw * SPEED_SCALE
 
+    # 负载/PWM占空比：低字节在前 → 有符号转换 → [-1, 1]
+    load_raw = all_data[4] | (all_data[5] << 8)
+    load_raw = packetHandler.scs_tohost(load_raw, 15)
+    load = load_raw / 1000.0  # 1000 = 100% PWM
+
     # 电压：原始值 × 0.1 = V
-    volts = read1(SMS_STS_PRESENT_VOLTAGE) * 0.1
+    volts = all_data[6] * 0.1
 
     # 温度
-    temp = float(read1(SMS_STS_PRESENT_TEMPERATURE))
+    temp = float(all_data[7])
 
-    return {"position": ..., "speed": ..., "load": 0.0, ...}
+    return {"position": ..., "speed": ..., "load": load, ...}
 ```
+
+**批量读取的寄存器布局（地址 56~63，连续 8 字节）：**
+
+| 偏移 | 地址 | 内容 | 转换后单位 |
+|------|------|------|-----------|
+| 0-1 | 56-57 | Present Position | rad |
+| 2-3 | 58-59 | Present Speed | rad/s |
+| 4-5 | 60-61 | Present Load / PWM Duty | [-1, 1]（1000 = 100% PWM） |
+| 6 | 62 | Present Voltage | V |
+| 7 | 63 | Present Temperature | °C |
 
 **单位转换链：**
 | 物理量 | 舵机原始值 | → | BAM 标准单位 |
 |--------|-----------|---|-------------|
 | 位置 | 计数（12 位） | ÷ 651.9 | rad |
 | 速度 | 单位（0.732 RPM） | × 0.0767 | rad/s |
+| 负载/PWM | 原始值（0~1000） | ÷ 1000 | [-1, 1] 占空比 |
 | 电压 | 原始值（0.1V） | × 0.1 | V |
+
+**采样性能对比：**
+| 版本 | 读取方式 | 读取通信次数 | 采样率 |
+|------|---------|-------------|--------|
+| 原始版 | 4 次单独读 | 4 次 | ~100 Hz |
+| 优化版 | **一次批量读 8 字节** | **1 次** | **~250 Hz** |
 
 ---
 
@@ -422,30 +480,33 @@ trajectories = [
 ```python
 for kp in kps:
     for trajectory in trajectories:
-        # 可选语音播报当前阶段
-        if args.speak:
-            gtts 播报 + mpg321 播放
+        # 打印当前阶段
+        print(f"Kp {kp}, trajectory {trajectory}")
         
-        # 调用单条记录脚本
-        os.system(f"python3 -m bam.feetech.record --kp {kp} --trajectory {trajectory} ...")
+        # 调用单条记录脚本（用 subprocess.run，跨平台兼容）
+        subprocess.run(command, check=True)
         
         # sin_time_square 后等待 3 秒稳定
         if trajectory == "sin_time_square":
             time.sleep(3)
 ```
 
+**关键实现细节：**
+- 用 `sys.executable` 确保用当前 Python 环境
+- 用 `subprocess.run(check=True)` 执行，失败了直接抛错
+- 跨平台兼容（Windows / Mac / Linux）
+
 ### 3.3 命令行参数
 
 ```bash
-python -m bam.feetech.all_record \
-    --mass 0.5 \           # 配重质量 [kg]
-    --length 0.15 \        # 摆臂长度 [m]
-    --motor hd1910 \       # 电机名称（标签用）
-    --port COM3 \          # 串口
-    --id 1 \               # 舵机 ID
-    --vin 7.4 \            # 供电电压（默认 7.4V）
-    --logdir data_raw \    # 输出目录
-    --speak                # 可选：语音播报
+python -m bam.feetech.all_record `
+    --mass 0.5 `           # 配重质量 [kg]
+    --length 0.15 `        # 摆臂长度 [m]
+    --motor hd1910 `       # 电机名称（决定 P 增益地址）
+    --port COM3 `          # 串口
+    --id 1 `               # 舵机 ID
+    --vin 7.4 `            # 供电电压（默认 7.4V）
+    --logdir data_raw      # 输出目录
 ```
 
 ---
@@ -520,3 +581,11 @@ actuators = {
 | **stateful** | True（有内部状态） | 无状态（纯函数） |
 | **轨迹列表** | 5 条（含无效的 brutal） | 4 条（官方标准轨迹） |
 | **支持舵机** | 仅 STS3215 | STS3215 + **HD1910** |
+| **读取方式** | 4 次单独读 | **一次批量读 8 字节**（采样率 ~100Hz → ~250Hz） |
+| **录制写入** | 带应答（write2） | **只发不收（write2_only）** |
+| **扭矩切换** | 带应答（write1） | **只发不收（write1_only）** |
+| **延时策略** | 固定 2ms | **动态延时**（不足1ms就补，最多1ms） |
+| **预热机制** | 1秒每帧都写 | **写成功就停，最多试10次** |
+| **错误处理** | 无 | **try-finally 安全退出**（关扭矩+关串口） |
+| **批量执行** | os.system（Windows 不兼容） | **subprocess.run**（跨平台） |
+| **语音播报** | 有（Windows 有 bug） | 已删除 |
