@@ -26,9 +26,20 @@ ADDR_P_GAIN_MAP = {
     "hd1910": 50,
 }
 
-# 位置换算：12 位有效精度，4096 计数 = 2π（一圈）
-# STS3215 和 HD1910 通用
-POS_SCALE = 4096.0 / (2 * np.pi)  # rad → 原始值
+# 位置换算：
+# 0 rad → 2048（中点）
+# -π rad → 0
+# +π rad → 4095
+# 12 位有效精度，4096 计数 = 2π（一圈）
+POS_COUNT_PER_REV = 4096.0
+
+def pos_rad_to_raw(rad):
+    """弧度 → 舵机原始位置值"""
+    return int(POS_COUNT_PER_REV * (rad / (2 * np.pi) + 0.5))
+
+def pos_raw_to_rad(raw):
+    """舵机原始位置值 → 弧度"""
+    return 2 * np.pi * ((raw / POS_COUNT_PER_REV) - 0.5)
 
 # 速度单位换算：原始值 × 0.732 RPM → rad/s
 # STS3215 和 HD1910 通用
@@ -126,10 +137,10 @@ def read_data():
     )
     check_result(result, error, "批量读取位置/速度/负载/电压/温度")
 
-    # 位置：低字节在前
+    # 位置：低字节在前 → 有符号转换 → 转弧度
     pos_raw = all_data[0] | (all_data[1] << 8)
     pos_raw = packetHandler.scs_tohost(pos_raw, 15)
-    position = pos_raw / POS_SCALE
+    position = pos_raw_to_rad(pos_raw)
 
     # 速度：低字节在前
     speed_raw = all_data[2] | (all_data[3] << 8)
@@ -170,7 +181,7 @@ try:
     while retry_count < max_retry:
         retry_count += 1
         goal_position, torque_enable = trajectory(0)
-        pos_value = int(goal_position * POS_SCALE)
+        pos_value = pos_rad_to_raw(goal_position)
 
         # 目标位置：没成功就写，成功了就停（带应答）
         if not pos_ok:
@@ -241,7 +252,7 @@ try:
 
         # 发送目标位置（只发不收，不等应答）
         if torque_enable:
-            pos_value = int(goal_position * POS_SCALE)
+            pos_value = pos_rad_to_raw(goal_position)
             write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
 
         # 计算写操作耗时，不足 1ms 就补延时
@@ -271,12 +282,12 @@ try:
         else:
             goal_position = min(0, goal_position + max_variation)
 
-        pos_value = int(goal_position * POS_SCALE)
+        pos_value = pos_rad_to_raw(goal_position)
         write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
         time.sleep(return_dt)
 
-    # 归位到零位
-    write2_only(SMS_STS_GOAL_POSITION_L, 0)
+    # 归位到零位（中点 2048）
+    write2_only(SMS_STS_GOAL_POSITION_L, pos_rad_to_raw(0))
     time.sleep(1)
 
 finally:
