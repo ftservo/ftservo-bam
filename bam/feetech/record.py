@@ -223,6 +223,8 @@ try:
 
 
     torque_enable = True
+    read_fail_count = 0
+    MAX_READ_FAIL = 10
     while time.time() - start < trajectory.duration:
         loop_start = time.time() - start
         t = loop_start
@@ -240,13 +242,19 @@ try:
 
         # 读取数据
         t0 = time.time() - start
-        entry = read_data()
-        t1 = time.time() - start
-
-        entry["timestamp"] = (t0 + t1) / 2.0
-        entry["goal_position"] = goal_position
-        entry["torque_enable"] = torque_enable
-        data["entries"].append(entry)
+        try:
+            entry = read_data()
+            t1 = time.time() - start
+            # 成功读取，记录数据
+            entry["timestamp"] = (t0 + t1) / 2.0
+            entry["goal_position"] = goal_position
+            entry["torque_enable"] = torque_enable
+            data["entries"].append(entry)
+        except RuntimeError as e:
+            read_fail_count += 1
+            print(f"读取数据失败（第 {read_fail_count}/{MAX_READ_FAIL} 次）：{e}")
+            if read_fail_count >= MAX_READ_FAIL:
+                raise RuntimeError(f"连续读取数据失败 {MAX_READ_FAIL} 次，退出录制") from e
 
         # 动态延时：保证每帧至少 1ms 周期
         loop_duration = time.time() - start - loop_start
