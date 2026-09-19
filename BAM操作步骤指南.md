@@ -164,6 +164,7 @@ uv run python -m bam.feetech.record `
     --id 1 `
     --motor hd1910 `
     --mass 0.5 `
+    --arm-mass 0.05 `
     --length 0.15 `
     --vin 7.4 `
     --kp 32 `
@@ -178,7 +179,8 @@ uv run python -m bam.feetech.record `
 | `--port` | `COM3` | 串口通信板设备名（Windows 是 COMx，Linux 是 /dev/ttyUSBx） |
 | `--id` | `1` | 舵机 ID（出厂默认 1，可通过舵机设置软件修改） |
 | `--motor` | `hd1910` | 电机型号标识：① 决定 P 增益寄存器地址 ② 写入数据文件的标签 |
-| `--mass` | `0.5` | 配重块质量 [kg]，必须和实际称重一致 |
+| `--mass` | `0.5` | 末端配重块质量 [kg]，必须和实际称重一致 |
+| `--arm-mass` | `0.05` | 摆臂自身质量 [kg]（可选，默认 0.0） |
 | `--length` | `0.15` | 摆臂长度 [m]，从舵机轴心到配重中心的距离 |
 | `--vin` | `7.4` | 实际供电电压 [V]，默认 7.4V |
 | `--kp` | `32` | 固件 P 增益（范围 0-255，默认 32） |
@@ -195,6 +197,7 @@ uv run python -m bam.feetech.record `
     --id 1 `
     --motor sts3215 `
     --mass 0.5 `
+    --arm-mass 0.05 `
     --length 0.15 `
     --vin 7.4 `
     --kp 32 `
@@ -210,6 +213,7 @@ uv run python -m bam.feetech.all_record `
     --id 1 `
     --motor hd1910 `
     --mass 0.5 `
+    --arm-mass 0.05 `
     --length 0.15 `
     --vin 7.4 `
     --logdir data_raw_hd1910
@@ -236,6 +240,7 @@ uv run python -m bam.feetech.all_record `
 ```json
 {
   "mass": 0.5,
+  "arm-mass": 0.05,
   "length": 0.15,
   "kp": 32,
   "vin": 7.4,
@@ -259,6 +264,13 @@ uv run python -m bam.feetech.all_record `
 **字段说明：**
 | 字段 | 单位 | 说明 |
 |------|------|------|
+| `mass` | kg | 末端配重质量 |
+| `arm-mass` | kg | 摆臂自身质量（默认 0.0） |
+| `length` | m | 摆臂长度 |
+| `kp` | — | 固件 P 增益 |
+| `vin` | V | 供电电压 |
+| `motor` | string | 电机型号标识 |
+| `trajectory` | string | 轨迹名称 |
 | `position` | rad | 实际位置 |
 | `speed` | rad/s | 实际速度 |
 | `load` | [-1, 1] | **PWM 占空比反馈**（1.0 = 100% PWM） |
