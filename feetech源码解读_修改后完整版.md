@@ -1,6 +1,6 @@
 ﻿# `bam/feetech/` 源码解读（修改后完整版）
 
-> 基于修改后的代码：去除速率限制 + ftservo-python-sdk 官方驱动
+> 基于修改后的代码：STS3215 带固件速率限制 + HD1910 无速率限制 + ftservo-python-sdk 官方驱动
 > 硬件支持：Feetech STS3215 / HD1910 7.4V 总线舵机
 
 ---
@@ -19,15 +19,27 @@ bam/feetech/
 
 ## 一、`actuator.py` — 仿真模型
 
-文件中包含两个舵机类，都继承自 `VoltageControlledActuator`（电压控制型执行器基类）。
+文件中包含一个公共基类 `FeetechBaseActuator`，以及两个舵机子类：
+- `FeetechBaseActuator` 继承自 `VoltageControlledActuator`（电压控制型执行器基类）
+- 封装了 HD1910 共用的无速率限制控制逻辑（STS3215 子类重写）
 
 ---
 
-### 1.1 类：`STS3215Actuator`
+### 1.0 公共基类：`FeetechBaseActuator`
+
+STS3215 和 HD1910 同协议，控制算法完全一样，只有参数不同，所以抽出公共基类。
+
+**核心方法：** `compute_control()` —— 基类实现无速率限制版本，STS3215 子类重写为带速率限制版本。
+
+---
+
+---
+
+### 1.1 类：`STS3215Actuator`（继承自 FeetechBaseActuator）
 
 模拟 Feetech STS3215 舵机行为。
 
-**修改要点：** 已去除固件内部速率限制器，直接跟踪目标位置。
+**说明：** STS3215 固件内部有速率限制，模拟为带状态的 q_target_smooth + max_velocity 待辨识参数。
 
 #### 构造函数参数
 
@@ -85,10 +97,11 @@ def initialize(self):
 | `kt` | 0.785 | 0.05 | 2.5 | 扭矩常数 [Nm/A] |
 | `error_gain_ratio` | 1.0 | 0.1 | 10.0 | error_gain 修正系数 |
 | `R` | 2.0 | 0.1 | 10.0 | 电机电阻 [Ω] |
-| `armature` | 0.0001 | 1e-5 | 0.04 | 等效转动惯量 [kg·m²] |
+| `armature` | 0.024 | 0.001 | 0.08 | 等效转动惯量 [kg·m²]（含减速箱+负载） |
+| `max_velocity` | 7.0 | 1.0 | 15.0 | **固件内部最大速率限制 [rad/s]** |
 | `q_offset` | 0.0 | -0.2 | 0.2 | 安装位置偏移 [rad] |
 
-> 注：已删除原 `max_velocity` 参数（速率限制已去除）。
+> 注：STS3215 固件内部有速率限制，`max_velocity` 是待辨识参数；HD1910 无速率限制，无此参数。
 
 ---
 
@@ -152,7 +165,14 @@ def initialize(self):
 
 ### 1.3 共用控制逻辑：`compute_control()`
 
-两个类的 `compute_control()` 完全相同：
+两个类的 `compute_control()` 不一样：
+
+| 舵机 | compute_control 类型 | 说明 |
+|------|---------------------|------|
+| **HD1910** | 无速率限制（纯函数） | 直接：目标 - 当前位置 = 误差 |
+| **STS3215** | **带速率限制（有状态）** | 先平滑目标位置，再算误差 |
+
+**HD1910 版（无速率限制，基类实现）：**
 
 ```python
 def compute_control(self, q_target, q, dq, dt):
@@ -164,7 +184,30 @@ def compute_control(self, q_target, q, dq, dt):
     )
     duty_cycle = self.backend.clamp(duty_cycle, -self.max_pwm, self.max_pwm)
     self.duty_cycle = duty_cycle
-    return self.vin * duty_cycle  # 输出电压 = 供电电压 × 占空比
+    return self.vin * duty_cycle
+```
+
+**STS3215 版（带速率限制，子类重写）：**
+
+```python
+def compute_control(self, q_target, q, dq, dt):
+    # 第一次调用：内部目标 = 当前位置
+    if self.q_target_smooth is None:
+        self.q_target_smooth = q
+
+    # 速率限制：内部目标最多以 max_velocity 的速度靠近
+    max_step = self.model.max_velocity.value * dt
+    self.q_target_smooth = clamp(q_target, smooth - max_step, smooth + max_step)
+
+    # P 控制器：误差 = 平滑后的内部目标 - 当前位置
+    duty_cycle = (
+        (self.q_target_smooth - q)
+        * self.kp
+        * self.error_gain
+        * self.model.error_gain_ratio.value
+    )
+    duty_cycle = clamp(duty_cycle, -self.max_pwm, self.max_pwm)
+    return self.vin * duty_cycle
 ```
 
 **控制流程：**
@@ -344,7 +387,8 @@ python -m bam.feetech.record `
 ```
 
 **预热阶段：**
-- 写 P 增益、目标位置（带应答确认）
+- 写 P 增益、写速度=0、写目标位置（三个写操作，都带应答确认）
+- 顺序：先设速度寄存器（位置模式，不限制转动速度），再写目标位置
 - 最多重试 10 次，每次间隔 10ms
 - 任何一次失败都打印具体原因，继续重试
 - 10 次都失败就报错退出
@@ -417,7 +461,7 @@ while time.time() - start < trajectory.duration:
 
 ### 2.6 数据读取（`read_data()`）— 批量读取优化
 
-**优化说明：** 一次读 8 字节，同时拿到所有数据，采样率从 ~100 Hz 提升到 ~250 Hz。
+**优化说明：** 一次读 8 字节，同时拿到所有数据，采样率从 ~100 Hz 提升到 ~500 Hz。
 
 ```python
 def read_data():
@@ -436,10 +480,13 @@ def read_data():
     speed_raw = packetHandler.scs_tohost(speed_raw, 15)
     speed = speed_raw * SPEED_SCALE
 
-    # 负载/PWM占空比：低字节在前 → 有符号转换 → [-1, 1]
+    # 负载/PWM占空比：11位寄存器，bit 0-9 数值，bit 10 方向位
     load_raw = all_data[4] | (all_data[5] << 8)
-    load_raw = packetHandler.scs_tohost(load_raw, 15)
-    load = load_raw / 1000.0  # 1000 = 100% PWM
+    load_value = load_raw & 0x3FF  # 取低10位数值
+    load_sign = (load_raw >> 10) & 0x1  # bit 10 是方向位
+    load = load_value / 1000.0  # 1000 = 100% PWM
+    if load_sign:
+        load = -load
 
     # 电压：原始值 × 0.1 = V
     volts = all_data[6] * 0.1
@@ -475,7 +522,7 @@ def read_data():
 |------|---------|---------|--------|
 | 原始版 | 4 次单独读 | 带应答 | ~100 Hz |
 | 中间版 | 一次批量读 8 字节 | 普通 TxOnly | ~250 Hz |
-| **最终版** | **一次批量读 8 字节** | **同步写广播（不应答）** | **~600-1000 Hz** |
+| **最终版** | **一次批量读 8 字节** | **同步写广播（不应答）** | **~500 Hz** |
 
 ---
 
@@ -617,7 +664,8 @@ actuators = {
 | 项目 | 修改前 | 修改后 |
 |------|--------|--------|
 | **通信库** | pypot.feetech.FeetechSTS3215IO | scservo_sdk（官方 ftservo-python-sdk） |
-| **速率限制** | 有（q_target_smooth + max_velocity） | 无（直接跟踪目标） |
+| **STS3215 速率限制** | 有（q_target_smooth + max_velocity） | 有（与原版一致） |
+| **HD1910 速率限制** | - | 无（新增型号，位置模式无限制） |
 | **error_gain** | 0.166 | **0.163**（实测标定：KP=1 时 4000 计数 → 100% PWM） |
 | **位置精度** | 15 位假设 | 12 位实际（4096 计数/圈） |
 | **速度单位** | 0.1°/s | 0.732 RPM/单位 |
