@@ -1,4 +1,4 @@
-# BAM 项目操作步骤指南
+﻿# BAM 项目操作步骤指南
 
 > **BAM (Better Actuator Models)** — 伺服执行器摩擦模型辨识与仿真工具库
 > 仓库：https://github.com/Rhoban/bam
@@ -46,27 +46,27 @@ BAM 是一个 Python 库，用于**辨识**和**使用**伺服执行器（舵机
 > 虚拟环境的目的：**测试修改代码后的程序**，不污染系统 Python。
 > 虚拟环境与全局 Python 互不共享，所有依赖都要在虚拟环境里单独装一遍。
 
-**方法 A：uv run 自动创建（一条命令搞定）**
+**方法 A：uv run 自动创建（一条命令搞定，用国内源）**
 
 ```powershell
 # 1. 进入项目目录
-cd D:\gitree\bam
+cd F:\FTServo-GIT\ftservo-bam
 
 # 2. 直接运行命令，uv run 自动创建虚拟环境并安装依赖
 #    --extra identification 安装辨识工具链（ftservo-python-sdk、optuna、cmaes 等）
 #    第一次运行会自动创建 .venv 并安装所有依赖，之后直接跑就行
-uv run --extra identification python -m bam.feetech.record --help
+uv run --extra identification --default-index https://pypi.tuna.tsinghua.edu.cn/simple python -m bam.feetech.record --help
 ```
 
-**方法 B：先 sync 再 run（两步）**
+**方法 B：先 sync 再 run（两步，用国内源）**
 
 ```powershell
 # 1. 进入项目目录
-cd D:\gitree\bam
+cd F:\FTServo-GIT\ftservo-bam
 
 # 2. 创建虚拟环境并同步所有依赖
 uv venv .venv
-uv sync --extra identification
+uv sync --extra identification --default-index https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 3. 之后直接 run
 uv run python -m bam.feetech.record --help
@@ -77,8 +77,22 @@ uv run python -m bam.feetech.record --help
 - 可编辑模式安装，改代码立即生效，不用重装
 - 用完删 `.venv` 文件夹就彻底卸载，无残留
 
+- 加了 `--default-index` 参数用国内源，下载速度比官方源快 10 倍以上
+
+> **常用国内源列表：**
+>
+> | 源 | URL | 特点 |
+> |----|-----|------|
+> | 清华 | `https://pypi.tuna.tsinghua.edu.cn/simple` | 最常用，速度快 |
+> | 华为云 | `https://mirrors.huaweicloud.com/repository/pypi/simple/` | 最稳定 |
+> | 中科大 | `https://pypi.mirrors.ustc.edu.cn/simple/` | 老牌源 |
+> | 阿里 | `https://mirrors.aliyun.com/pypi/simple/` | 阿里云用户快 |
+>
+> 把上面命令里的 `--default-index` 后面换成你想用的源地址即可。
+
 > **依赖包说明：**
 > - `--extra identification`：只装**辨识工具链**（ftservo-python-sdk、optuna、cmaes、matplotlib 等），用于数据采集和参数拟合
+> - 已删除 `PyQt5` 依赖（Windows 无预编译 wheel，画图用 matplotlib Agg 后端即可）
 > - `--extra mujoco`：额外装 MuJoCo 物理仿真引擎，用于场景二的仿真
 > - `--extra all`：全部都装（辨识 + MuJoCo + mjlab GPU）
 >
@@ -607,3 +621,7 @@ A: 辨识完成后，将参数 JSON 和原始数据提交到 BAM 仓库的 `bam/
 - **论文原文：** https://arxiv.org/abs/2410.08650
 - **原始数据：** HuggingFace - buckots/Gregwar/bam_data
 - **示例项目：** Open Duck Mini（使用 BAM 标定舵机的开源人形机器人）
+
+
+
+
