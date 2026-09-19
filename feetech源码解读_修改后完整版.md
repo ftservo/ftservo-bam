@@ -368,11 +368,8 @@ while time.time() - start < trajectory.duration:
         pos_value = pos_rad_to_raw(goal_position)
         write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
     
-    # 动态延时：写操作不足1ms就补，超过1ms就不补
-    t_write_end = time.time()
-    write_duration = t_write_end - t_write_start
-    if write_duration < 0.001:
-        time.sleep(0.001 - write_duration)
+    # 固定延时 1ms
+    time.sleep(0.001)
     
     # 读取传感器数据
     entry = read_data()
@@ -602,7 +599,7 @@ actuators = {
 | **读取方式** | 4 次单独读 | **一次批量读 8 字节**（采样率 ~100Hz → ~250Hz） |
 | **录制写入** | 带应答（write2） | **只发不收（write2_only）** |
 | **扭矩切换** | 带应答（write1） | **只发不收（write1_only）** |
-| **延时策略** | 固定 2ms | **动态延时**（不足1ms就补，最多1ms） |
+| **延时策略** | 固定 2ms | **固定 1ms** |
 | **预热机制** | 1秒每帧都写 | **最多重试10次，成功后等1秒稳定** |
 | **错误处理** | 无 | **try-finally 安全退出**（关扭矩+关串口） |
 | **批量执行** | os.system（Windows 不兼容） | **subprocess.run**（跨平台） |
