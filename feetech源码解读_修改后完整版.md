@@ -229,9 +229,20 @@ ADDR_P_GAIN_MAP = {
     "hd1910": 50,
 }
 
-# 位置换算：12 位有效精度，4096 计数 = 2π（一圈）
-# STS3215 和 HD1910 通用
-POS_SCALE = 4096.0 / (2 * np.pi)  # ≈ 651.9 计数/rad
+# 位置换算：
+# 0 rad → 2048（中点）
+# -π rad → 0
+# +π rad → 4095
+# 12 位有效精度，4096 计数 = 2π（一圈）
+POS_COUNT_PER_REV = 4096.0
+
+def pos_rad_to_raw(rad):
+    """弧度 → 舵机原始位置值"""
+    return int(POS_COUNT_PER_REV * (rad / (2 * np.pi) + 0.5))
+
+def pos_raw_to_rad(raw):
+    """舵机原始位置值 → 弧度"""
+    return 2 * np.pi * ((raw / POS_COUNT_PER_REV) - 0.5)
 
 # 速度单位换算：原始值 × 0.732 RPM → rad/s
 # STS3215 和 HD1910 通用
@@ -350,7 +361,7 @@ while time.time() - start < trajectory.duration:
     
     # 发送目标位置（只发不收，不等应答）
     if torque_enable:
-        pos_value = int(goal_position * POS_SCALE)
+        pos_value = pos_rad_to_raw(goal_position)
         write2_only(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
     
     # 动态延时：写操作不足1ms就补，超过1ms就不补
@@ -388,7 +399,7 @@ def read_data():
     # 位置：低字节在前 → 有符号转换 → 转弧度
     pos_raw = all_data[0] | (all_data[1] << 8)
     pos_raw = packetHandler.scs_tohost(pos_raw, 15)
-    position = pos_raw / POS_SCALE
+    position = pos_raw_to_rad(pos_raw)
 
     # 速度：低字节在前 → 有符号转换 → 转 rad/s
     speed_raw = all_data[2] | (all_data[3] << 8)
@@ -422,10 +433,12 @@ def read_data():
 **单位转换链：**
 | 物理量 | 舵机原始值 | → | BAM 标准单位 |
 |--------|-----------|---|-------------|
-| 位置 | 计数（12 位） | ÷ 651.9 | rad |
+| 位置 | 计数（12 位，0~4095） | 减去中点 2048 后换算 | rad（对称坐标系） |
 | 速度 | 单位（0.732 RPM） | × 0.0767 | rad/s |
 | 负载/PWM | 原始值（0~1000） | ÷ 1000 | [-1, 1] 占空比 |
 | 电压 | 原始值（0.1V） | × 0.1 | V |
+
+> 位置坐标系：0 rad = 舵机中点（2048），-π rad = 一端极限，+π rad = 另一端极限。
 
 **采样性能对比：**
 | 版本 | 读取方式 | 读取通信次数 | 采样率 |
@@ -445,7 +458,7 @@ def read_data():
 
 ```python
 # P 增益扫描值（0-255 范围，两个舵机通用）
-kps = [4, 8, 16, 32]
+kps = [4, 8, 16, 32, 64]
 
 # 激励轨迹（覆盖不同摩擦工况）
 # 注：BAM 框架中没有 "brutal" 轨迹，已移除
@@ -473,7 +486,7 @@ trajectories = [
 | `steps` | 阶跃信号 |
 | `nothing` | 零扭矩纯重力响应 |
 
-**总记录数：** 4 P增益 × 4 轨迹 = **16 段**（单组质量/长度配置）
+**总记录数：** 5 P增益 × 4 轨迹 = **20 段**（单组质量/长度配置）
 
 ### 3.2 执行流程
 
@@ -589,3 +602,5 @@ actuators = {
 | **错误处理** | 无 | **try-finally 安全退出**（关扭矩+关串口） |
 | **批量执行** | os.system（Windows 不兼容） | **subprocess.run**（跨平台） |
 | **语音播报** | 有（Windows 有 bug） | 已删除 |
+| **位置坐标系** | 0 rad = 舵机一端（0 计数） | **0 rad = 中点（2048 计数）**（对称坐标系） |
+| **P 增益扫描数** | 4 个值 | **5 个值**（4, 8, 16, 32, 64） |
