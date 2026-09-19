@@ -1,4 +1,4 @@
-# Copyright 2026 ftservo
+﻿# Copyright 2026 ftservo
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 from scservo_sdk import PortHandler, COMM_SUCCESS
-from scservo_sdk.sms_sts import sms_sts, SMS_STS_TORQUE_ENABLE, SMS_STS_GOAL_POSITION_L
+from scservo_sdk.sms_sts import sms_sts, SMS_STS_TORQUE_ENABLE, SMS_STS_GOAL_POSITION_L, SMS_STS_GOAL_SPEED_L
 from scservo_sdk.sms_sts import SMS_STS_PRESENT_POSITION_L, SMS_STS_PRESENT_SPEED_L
 from scservo_sdk.sms_sts import SMS_STS_PRESENT_VOLTAGE, SMS_STS_PRESENT_TEMPERATURE
 import json
@@ -193,6 +193,7 @@ try:
         try:
             write1(ADDR_P_GAIN, args.kp)
             write2(SMS_STS_GOAL_POSITION_L, pos_value & 0xFFFF)
+            write2(SMS_STS_GOAL_SPEED_L, 0)  # 速度设为0，位置模式
             break  # 都成功了就跳出
         except RuntimeError as e:
             if i == max_retry - 1:
@@ -200,7 +201,7 @@ try:
             print(f"预热第 {i+1} 次失败：{e}，10ms 后重试...")
             time.sleep(0.01)
 
-    print(f"预热完成：P 增益和目标位置已写入（第 {i+1} 次成功），等待 1 秒稳定")
+    print(f"预热完成：P 增益、目标位置、速度=0 已写入（第 {i+1} 次成功），等待 1 秒稳定")
     time.sleep(1)
 
     # ==================== 开始录制 ====================
@@ -284,3 +285,4 @@ date = datetime.datetime.now().strftime("%Y-%m-%d_%Hh%Mm%S")
 filename = f"{args.logdir}/{date}.json"
 with open(filename, "w") as f:
     json.dump(data, f)
+
