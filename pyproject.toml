@@ -50,7 +50,8 @@ identification = [
     "cmaes",
     "wandb",
     "matplotlib",
-    "ftservo-python-sdk"
+    "PyQt5",
+    "ftservo-python-sdk" 
 ]
 # Everything at once.
 all = [
@@ -76,4 +77,8 @@ extend-exclude = ["docs/_build"]
 quote-style = "double"
 indent-style = "space"
 
-
+[tool.uv]
+# pyqt5-qt5 5.15.2 is the only release shipping win32/win_amd64 wheels;
+# >=5.15.11 are manylinux/macosx-only, so uv sync --extra identification
+# cannot resolve on Windows without this pin.
+constraint-dependencies = ["pyqt5-qt5==5.15.2"]

@@ -1,16 +1,37 @@
+# ---- Python 缓存 / 编译产物 ----
 **/__pycache__
-trash/
-data/
 **.pyc
+**.pyo
+
+# ---- 编辑器临时文件 ----
 **.swp
-params.json
+*~
+
+# ---- 虚拟环境 / 构建产物 ----
+.venv/
 build/
 dist/
 bam.egg-info/
 better_actuator_models.egg-info/
 docs/_build/
 docs/autoapi/
+uv.lock
+
+# ---- 本地草稿 / 运行痕迹 ----
+trash/
+data/
+bak_*/
+notes.md
+params.json
+
+# ---- 数据采集 / 参数辨识工作区（脚本运行时生成，不入库）----
 data_raw/
 data_processed/
-uv.lock
-notes.md
+data_raw_*/
+data_processed_*/
+# 只忽略项目根的 params/（fit.py --output params/... 的落点），
+# 不能用 params/：那会连带忽略 bam/params/ 下需要纳管的参数文件
+/params/
+
+# ---- 打包产物 ----
+*.zip
