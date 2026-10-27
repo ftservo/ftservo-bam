@@ -29,9 +29,9 @@ actuators = {
     # eRob actuators with custom PD controller
     "erob80_100": lambda: ErobActuator(Pendulum, damping=2.0),
     "erob80_50": lambda: ErobActuator(Pendulum, damping=1.0),
-    # Feetech STS3215
+    # Feetech
     "sts3215": lambda: STS3215Actuator(Pendulum),   
-    "HD1910": lambda: HD1910Actuator(Pendulum),
+    "hd1910": lambda: HD1910Actuator(Pendulum),
     # Waveshare ST3025
     "waveshare_st3025": lambda: ST3025Actuator(Pendulum),
     # Unitree Go1
